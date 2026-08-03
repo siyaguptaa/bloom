@@ -789,7 +789,8 @@
 
         <div class="form-toplevel-error" id="formTopError" role="alert"></div>
 
-        <form id="earlyAccessForm" novalidate>
+        <iframe name="bloomSubmitFrame" id="bloomSubmitFrame" style="display:none" title="submission handler" aria-hidden="true"></iframe>
+        <form id="earlyAccessForm" novalidate target="bloomSubmitFrame" method="POST" enctype="multipart/form-data">
 
           <div class="field">
             <label for="fullName">Full Name <span class="req">*</span></label>
@@ -819,7 +820,7 @@
               <div class="upload-file-name" id="uploadFileName"></div>
               <div class="upload-progress" id="uploadProgress"><span></span></div>
             </div>
-            <input type="file" id="resumeUpload" name="resumeUpload" accept=".pdf,.doc,.docx" class="sr-only" required>
+            <input type="file" id="resumeUpload" name="resume" accept=".pdf,.doc,.docx" class="sr-only" required>
             <div class="err-msg" id="resumeErr">Please upload a PDF, DOC or DOCX file under 10MB.</div>
           </div>
 
@@ -1008,73 +1009,71 @@
       return valid;
     }
 
-    // basic sanitizer — strips tags/scripts from free-text fields before sending
-    function sanitize(str){
-      return String(str || '').replace(/<[^>]*>/g, '').trim();
-    }
-
     var isSubmitting = false;
+    var submitFrame = document.getElementById('bloomSubmitFrame');
+    var submitTimeout = null;
+
+    // Google Apps Script Web Apps issue a redirect before responding, which
+    // browsers block JS from reading (a CORS restriction on the redirect
+    // target, not a sign the request failed). Submitting the actual <form>
+    // into a hidden iframe sidesteps this: the browser is allowed to load
+    // cross-origin content into an iframe even when JS can't read it back.
+    // We treat the iframe's "load" event (fired once the response comes
+    // back) as our success signal.
+    function onFrameLoad(){
+      if(!isSubmitting) return; // ignore the initial blank-iframe load on page open
+      clearTimeout(submitTimeout);
+      isSubmitting = false;
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('loading');
+      uploadProgress.style.display = 'none';
+      form.style.display = 'none';
+      successState.style.display = 'block';
+      successState.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+    submitFrame.addEventListener('load', onFrameLoad);
 
     form.addEventListener('submit', function(e){
-      e.preventDefault();
-      if(isSubmitting) return;
+      if(isSubmitting){ e.preventDefault(); return; }
       topError.style.display = 'none';
 
       if(!validateForm()){
+        e.preventDefault();
         var firstError = form.querySelector('.has-error input, .has-error select, .has-error textarea, .has-error');
         if(firstError) firstError.scrollIntoView({behavior:'smooth', block:'center'});
         return;
       }
 
       if(BLOOM_SUBMIT_ENDPOINT.indexOf('REPLACE_WITH') === 0){
+        e.preventDefault();
         topError.textContent = 'Form endpoint is not configured yet. See the README for setup instructions.';
         topError.style.display = 'block';
         return;
       }
 
+      // Let the browser perform a real multipart form submission
+      // (not fetch) targeted at the hidden iframe.
+      form.action = BLOOM_SUBMIT_ENDPOINT;
+
       isSubmitting = true;
       submitBtn.disabled = true;
       submitBtn.classList.add('loading');
       uploadProgress.style.display = 'block';
-      uploadProgress.querySelector('span').style.width = '30%';
+      uploadProgress.querySelector('span').style.width = '60%';
 
-      var fd = new FormData();
-      fd.append('fullName', sanitize(form.fullName.value));
-      fd.append('email', sanitize(form.email.value));
-      fd.append('linkedin', sanitize(form.linkedin.value));
-      fd.append('currentRole', sanitize(form.currentRole.value));
-      fd.append('yearsExperience', sanitize(form.yearsExperience.value));
-      fd.append('preferredRole', sanitize(form.preferredRole.value));
-      fd.append('preferredLocation', sanitize(form.preferredLocation.value));
-      fd.append('expectedSalary', sanitize(form.expectedSalary.value));
-      fd.append('howCanHelp', sanitize(form.howCanHelp.value));
-      fd.append('updatesOptIn', form.updatesOptIn.checked ? 'Yes' : 'No');
-      fd.append('resume', resumeInput.files[0]);
+      // Safety net: if the iframe never fires load (offline, blocked, etc.)
+      submitTimeout = setTimeout(function(){
+        if(!isSubmitting) return;
+        isSubmitting = false;
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('loading');
+        uploadProgress.style.display = 'none';
+        topError.textContent = "This is taking longer than expected. Please check your connection and try again, or email us directly at hi.bloom.org@gmail.com.";
+        topError.style.display = 'block';
+        topError.scrollIntoView({behavior:'smooth', block:'center'});
+      }, 20000);
 
-      fetch(BLOOM_SUBMIT_ENDPOINT, { method: 'POST', body: fd })
-        .then(function(res){
-          uploadProgress.querySelector('span').style.width = '100%';
-          if(!res.ok) throw new Error('Submission failed');
-          return res.json().catch(function(){ return {status:'ok'}; });
-        })
-        .then(function(data){
-          if(data && data.status === 'error'){ throw new Error(data.message || 'Submission failed'); }
-          form.style.display = 'none';
-          successState.style.display = 'block';
-          successState.scrollIntoView({behavior:'smooth', block:'center'});
-        })
-        .catch(function(err){
-          topError.textContent = "Something went wrong sending your details. Please try again, or email us directly at hi.bloom.org@gmail.com.";
-          topError.style.display = 'block';
-          topError.scrollIntoView({behavior:'smooth', block:'center'});
-        })
-        .finally(function(){
-          isSubmitting = false;
-          submitBtn.disabled = false;
-          submitBtn.classList.remove('loading');
-          uploadProgress.style.display = 'none';
-          uploadProgress.querySelector('span').style.width = '0%';
-        });
+      // do not preventDefault — the form submits natively into the iframe
     });
   })();
 
