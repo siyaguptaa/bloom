@@ -820,7 +820,10 @@
               <div class="upload-file-name" id="uploadFileName"></div>
               <div class="upload-progress" id="uploadProgress"><span></span></div>
             </div>
-            <input type="file" id="resumeUpload" name="resume" accept=".pdf,.doc,.docx" class="sr-only" required>
+            <input type="file" id="resumeUpload" accept=".pdf,.doc,.docx" class="sr-only" required>
+            <input type="hidden" name="resumeBase64" id="resumeBase64Field">
+            <input type="hidden" name="resumeFileName" id="resumeFileNameField">
+            <input type="hidden" name="resumeMimeType" id="resumeMimeTypeField">
             <div class="err-msg" id="resumeErr">Please upload a PDF, DOC or DOCX file under 10MB.</div>
           </div>
 
@@ -917,7 +920,7 @@
   // CONFIG — set this to your deployed Google Apps Script Web App URL
   // See bloom-apps-script.js + README for setup instructions.
   // ---------------------------------------------------------------
-  var BLOOM_SUBMIT_ENDPOINT = "https://script.google.com/macros/s/AKfycbze-9B5NUvEdaQIW-1yDricDSKxWTdok9rGke8pYgLx5lI2GCOIcAqV8Ovb5fP7KOVn/exec";
+  var BLOOM_SUBMIT_ENDPOINT = "https://script.google.com/macros/s/AKfycbwC1D8nxDGR2uiUn_S716tnokCDoeoPE70uVKeQPzlvi_lr_9TqRgorH4H-rhY9sqBp/exec";
 
   (function(){
     var form = document.getElementById('earlyAccessForm');
@@ -933,6 +936,14 @@
 
     var MAX_SIZE = 10 * 1024 * 1024;
     var ALLOWED_EXT = ['pdf','doc','docx'];
+    var EXT_MIME_MAP = {
+      pdf: 'application/pdf',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    };
+    var resumeBase64Field = document.getElementById('resumeBase64Field');
+    var resumeFileNameField = document.getElementById('resumeFileNameField');
+    var resumeMimeTypeField = document.getElementById('resumeMimeTypeField');
 
     uploadBox.addEventListener('click', function(){ resumeInput.click(); });
     uploadBox.addEventListener('keydown', function(e){
@@ -953,27 +964,54 @@
     });
     resumeInput.addEventListener('change', handleFileSelection);
 
+    function clearResumeFields(){
+      resumeBase64Field.value = '';
+      resumeFileNameField.value = '';
+      resumeMimeTypeField.value = '';
+      uploadFileName.style.display = 'none';
+    }
+
     function handleFileSelection(){
       var file = resumeInput.files[0];
       resumeErr.parentElement.classList.remove('has-error');
+      clearResumeFields();
       if(!file){ return; }
       var ext = file.name.split('.').pop().toLowerCase();
       if(ALLOWED_EXT.indexOf(ext) === -1){
         resumeErr.textContent = 'Please upload a PDF, DOC or DOCX file.';
         resumeErr.parentElement.classList.add('has-error');
         resumeInput.value = '';
-        uploadFileName.style.display = 'none';
         return;
       }
       if(file.size > MAX_SIZE){
         resumeErr.textContent = 'File is too large. Maximum size is 10MB.';
         resumeErr.parentElement.classList.add('has-error');
         resumeInput.value = '';
-        uploadFileName.style.display = 'none';
         return;
       }
-      uploadFileName.textContent = '✓ ' + file.name + ' (' + (file.size/1024/1024).toFixed(1) + ' MB)';
+
+      // Encode the file as base64 and stash it in hidden form fields.
+      // Apps Script reliably parses plain text form fields (unlike raw
+      // multipart file parts from an external page), so this is what
+      // actually gets the resume there intact.
+      uploadFileName.textContent = 'Reading file…';
       uploadFileName.style.display = 'block';
+      var reader = new FileReader();
+      reader.onload = function(){
+        var result = reader.result || '';
+        var base64 = result.indexOf(',') > -1 ? result.split(',')[1] : '';
+        resumeBase64Field.value = base64;
+        resumeFileNameField.value = file.name;
+        resumeMimeTypeField.value = file.type || EXT_MIME_MAP[ext] || 'application/octet-stream';
+        uploadFileName.textContent = '✓ ' + file.name + ' (' + (file.size/1024/1024).toFixed(1) + ' MB)';
+      };
+      reader.onerror = function(){
+        resumeErr.textContent = 'Could not read that file. Please try again.';
+        resumeErr.parentElement.classList.add('has-error');
+        resumeInput.value = '';
+        clearResumeFields();
+      };
+      reader.readAsDataURL(file);
     }
 
     function setFieldError(field, hasError){
@@ -1041,6 +1079,13 @@
         e.preventDefault();
         var firstError = form.querySelector('.has-error input, .has-error select, .has-error textarea, .has-error');
         if(firstError) firstError.scrollIntoView({behavior:'smooth', block:'center'});
+        return;
+      }
+
+      if(resumeInput.files.length && !resumeBase64Field.value){
+        e.preventDefault();
+        topError.textContent = "Still finishing reading your resume file — please wait a second and click Join again.";
+        topError.style.display = 'block';
         return;
       }
 
